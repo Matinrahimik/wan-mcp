@@ -1,12 +1,14 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "wan-mcp"
 version = "0.1.0"
-description = "stdio MCP server for Alibaba Wan 3.0 video (official Model Studio API only)"
+description = "Wan video generation for AI assistants"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=2.0,<3",

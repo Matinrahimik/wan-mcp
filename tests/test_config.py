@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from wan_mcp.config import ConfigError, apply_secrets_to_env, resolve_settings
+from wan_mcp.config import (
+    ConfigError,
+    apply_secrets_to_env,
+    default_output_dir,
+    load_env_file,
+    resolve_settings,
+)
 
 
 def test_env_only(tmp_path: Path) -> None:
@@ -133,3 +139,78 @@ def test_apply_secrets_to_env(tmp_path: Path) -> None:
     apply_secrets_to_env(env, secrets_root=tmp_path)
     assert env["WAN_REGION"] == "beijing"
     assert "sk" == env["DASHSCOPE_API_KEY"]
+
+
+def test_secrets_file_env(tmp_path: Path) -> None:
+    path = tmp_path / "creds.json"
+    path.write_text(
+        '{"api_key":"file-key","workspace_id":"file-ws","region":"beijing"}',
+        encoding="utf-8",
+    )
+    settings = resolve_settings(
+        {"WAN_SECRETS_FILE": str(path)},
+        secrets_root=tmp_path / "unused",
+    )
+    assert settings.api_key == "file-key"
+    assert settings.workspace_id == "file-ws"
+    assert settings.region == "beijing"
+
+
+def test_secrets_file_missing(tmp_path: Path) -> None:
+    missing = tmp_path / "no-such.json"
+    with pytest.raises(ConfigError, match="WAN_SECRETS_FILE"):
+        resolve_settings({"WAN_SECRETS_FILE": str(missing)}, secrets_root=tmp_path)
+
+
+def test_secrets_root_from_env(tmp_path: Path) -> None:
+    agent = tmp_path / "agent-xyz"
+    agent.mkdir()
+    (agent / "wan.json").write_text(
+        '{"api_key":"root-key","workspace_id":"root-ws","region":"singapore"}',
+        encoding="utf-8",
+    )
+    settings = resolve_settings(
+        {"WAN_SECRETS_ROOT": str(tmp_path), "WAN_AGENT_ID": "agent-xyz"}
+    )
+    assert settings.api_key == "root-key"
+    assert settings.workspace_id == "root-ws"
+
+
+def test_no_default_machine_secrets_root(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="DASHSCOPE_API_KEY"):
+        resolve_settings({})
+
+
+def test_output_dir_default_is_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    settings = resolve_settings(
+        {"DASHSCOPE_API_KEY": "sk", "WAN_WORKSPACE_ID": "ws"},
+        secrets_root=tmp_path / "none",
+    )
+    assert settings.output_dir == tmp_path / "wan-output"
+    assert default_output_dir() == tmp_path / "wan-output"
+
+
+def test_output_dir_from_env(tmp_path: Path) -> None:
+    out = tmp_path / "videos"
+    settings = resolve_settings(
+        {
+            "DASHSCOPE_API_KEY": "sk",
+            "WAN_WORKSPACE_ID": "ws",
+            "WAN_OUTPUT_DIR": str(out),
+        },
+        secrets_root=tmp_path / "none",
+    )
+    assert settings.output_dir == out
+
+
+def test_load_env_file_does_not_overwrite(tmp_path: Path) -> None:
+    path = tmp_path / ".env"
+    path.write_text(
+        "DASHSCOPE_API_KEY=from-dotenv\nWAN_WORKSPACE_ID=ws-dotenv\n# comment\n",
+        encoding="utf-8",
+    )
+    env = {"DASHSCOPE_API_KEY": "already-set"}
+    load_env_file(path, env)
+    assert env["DASHSCOPE_API_KEY"] == "already-set"
+    assert env["WAN_WORKSPACE_ID"] == "ws-dotenv"

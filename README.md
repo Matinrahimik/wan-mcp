@@ -1,105 +1,204 @@
+![wan-mcp](assets/cover.png)
+
 # wan-mcp
 
-Private **stdio** MCP server for HomeBooks [Alibaba Wan 3.0 video](https://www.alibabacloud.com/help/en/model-studio/wan3-video-generation-api-reference) via the **official Model Studio API only**. No AceDataCloud reseller. Tests never make a live paid generate call.
+Wan video generation for AI assistants
 
-Official source of truth: [Wan 3.0 video generation API reference](https://www.alibabacloud.com/help/en/model-studio/wan3-video-generation-api-reference). Tool schemas expose **only** fields on that page (no `enable_thinking`).
+stdio MCP server for [Alibaba Wan 3.0 video](https://www.alibabacloud.com/help/en/model-studio/wan3-video-generation-api-reference) through the official Model Studio API only. It exposes three tools so an assistant can create a task, poll status, and download the finished mp4.
 
-## Local install target
+Tests never make a live paid generate call.
 
-After merge, copy this repo to:
+Official source of truth: [Wan 3.0 video generation API reference](https://www.alibabacloud.com/help/en/model-studio/wan3-video-generation-api-reference). Tool schemas expose only fields on that page (no `enable_thinking`).
 
-```text
-/home/box/mcp-servers/wan/
-```
+## Supported model and features
+
+Fixed model: `wan3.0-video`.
+
+| Feature | Support |
+| --- | --- |
+| Text to video | `prompt` (Chinese or English, max 20000 characters) |
+| First / last frame | `media` types `first_frame`, `last_frame` (max 1 each) |
+| Reference media | `reference_image` (max 10), `reference_video` (max 5, total at most 15s), `reference_audio` (max 5, total at most 15s) |
+| File or link input | `file` (max 1) or `link` (max 1), not together |
+| Resolution | `1080P`, `720P`, `480P` (official default 1080P) |
+| Aspect ratio | `adaptive`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16` (official default adaptive) |
+| Duration | integer 2 to 30 seconds, or `-1` smart duration (official default 5) |
+| Audio, seed, watermark | `audio` (default true), `seed` in `[0, 2147483647]`, `watermark` (default false) |
+| Regions | `singapore` (`ap-southeast-1`) and `beijing` (`cn-beijing`) |
+
+`reference_*` / `file` / `link` cannot be combined with `first_frame` / `last_frame`. Create calls send `X-DashScope-Async: enable`. Task statuses: `PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`, `CANCELED`, `UNKNOWN`. On `SUCCEEDED`, `video_url` is valid for 24 hours. `wan_wait_for_video` downloads the mp4 to `WAN_OUTPUT_DIR`.
+
+## Requirements
+
+- Python 3.10 or newer
+- An Alibaba Cloud Model Studio workspace and DashScope API key
+
+## Install
 
 ```bash
-cd /home/box/mcp-servers/wan
+git clone https://github.com/Matinrahimik/wan-mcp.git
+cd wan-mcp
 python3 -m venv .venv
 .venv/bin/pip install -e .
+cp .env.example .env
 ```
 
-`run.py` loads connector secrets into the environment, then execs the `wan-mcp` console script (or `python -m wan_mcp` if the script is not on PATH). Same pattern as MiniMax: read secret JSON, set env, exec the Python MCP server.
+Edit `.env` with your key and workspace id. For development tests:
 
-### AddMcpServer
-
-```text
-name: wan
-command: /home/box/mcp-servers/wan/.venv/bin/python
-args: ["/home/box/mcp-servers/wan/run.py"]
+```bash
+.venv/bin/pip install -e ".[dev]"
+.venv/bin/pytest
 ```
 
-JSON equivalent:
+HTTP is mocked. There is no live paid generate call in CI or smoke tests.
 
-```json
-{
-  "mcpServers": {
-    "wan": {
-      "command": "/home/box/mcp-servers/wan/.venv/bin/python",
-      "args": ["/home/box/mcp-servers/wan/run.py"]
-    }
-  }
-}
-```
+`run.py` loads `.env` from the repo root (without overwriting variables already in the environment), resolves optional JSON secrets, then execs the `wan-mcp` console script (or `python -m wan_mcp` if the script is not on PATH).
 
-## Secrets (never commit keys)
+## Environment variables
 
-Resolution order (do **not** hardcode an agent id):
+Get an API key from [Alibaba Cloud Model Studio](https://www.alibabacloud.com/help/en/model-studio/get-api-key). `WAN_WORKSPACE_ID` is the Model Studio workspace id used as the `{WorkspaceId}` host prefix.
 
-1. Environment: `DASHSCOPE_API_KEY` / `WAN_WORKSPACE_ID` / `WAN_REGION`
-2. `/home/box/agent-data/connector-secrets/<agent-id>/wan.json` if `WAN_AGENT_ID` is set
-3. any `/home/box/agent-data/connector-secrets/*/wan.json` (exactly one file; several files without `WAN_AGENT_ID` is an error)
+Required:
 
-Secret file shape (no keys in this repo):
-
-```json
-{
-  "api_key": "...",
-  "workspace_id": "...",
-  "region": "singapore"
-}
-```
-
-`region` is `singapore` | `beijing`. If still unset after env + files, the server uses `singapore` (the region used by the official sample).
+| Env | Meaning |
+| --- | --- |
+| `DASHSCOPE_API_KEY` | DashScope API key (Bearer token) |
+| `WAN_WORKSPACE_ID` | Model Studio workspace id |
 
 Optional:
 
 | Env | Meaning |
 | --- | --- |
-| `WAN_OUTPUT_DIR` | Where SUCCEEDED mp4 files are written. Default `/workspace/wan-output/` |
+| `WAN_REGION` | `singapore` or `beijing`. Defaults to `singapore` if unset. |
+| `WAN_OUTPUT_DIR` | Directory for SUCCEEDED mp4 files. Defaults to `./wan-output` in the current working directory. |
+| `WAN_SECRETS_FILE` | Path to a JSON object with `api_key`, `workspace_id`, and `region`. Used only for fields still missing from the environment. |
+| `WAN_SECRETS_ROOT` | Directory of `<id>/wan.json` files. Used when env vars (and `WAN_SECRETS_FILE`) are incomplete. |
+| `WAN_AGENT_ID` | Subdirectory name under `WAN_SECRETS_ROOT` when more than one `wan.json` exists. |
 | `WAN_TEST_MODE=1` | Refuses live Model Studio HTTP unless an httpx client is injected. Set in unit tests. |
+
+Resolution order: environment variables, then `WAN_SECRETS_FILE`, then `WAN_SECRETS_ROOT/<WAN_AGENT_ID>/wan.json`, then a single `WAN_SECRETS_ROOT/*/wan.json`. Several matches without `WAN_AGENT_ID` is an error. Values already set in the environment are never overwritten by files.
+
+Secret file shape:
+
+```json
+{
+  "api_key": "sk-your-dashscope-api-key",
+  "workspace_id": "your-model-studio-workspace-id",
+  "region": "singapore"
+}
+```
+
+## MCP config
+
+Replace `/absolute/path/to/wan-mcp` with the clone path on your machine.
+
+### Cursor (`~/.cursor/mcp.json`)
+
+```json
+{
+  "mcpServers": {
+    "wan": {
+      "command": "/absolute/path/to/wan-mcp/.venv/bin/python",
+      "args": ["/absolute/path/to/wan-mcp/run.py"],
+      "env": {
+        "DASHSCOPE_API_KEY": "sk-your-dashscope-api-key",
+        "WAN_WORKSPACE_ID": "your-model-studio-workspace-id",
+        "WAN_REGION": "singapore"
+      }
+    }
+  }
+}
+```
+
+### Claude Desktop (`claude_desktop_config.json`)
+
+On macOS this file is `~/Library/Application Support/Claude/claude_desktop_config.json`. On Windows it is `%APPDATA%\Claude\claude_desktop_config.json`.
+
+```json
+{
+  "mcpServers": {
+    "wan": {
+      "command": "/absolute/path/to/wan-mcp/.venv/bin/python",
+      "args": ["/absolute/path/to/wan-mcp/run.py"],
+      "env": {
+        "DASHSCOPE_API_KEY": "sk-your-dashscope-api-key",
+        "WAN_WORKSPACE_ID": "your-model-studio-workspace-id",
+        "WAN_REGION": "singapore"
+      }
+    }
+  }
+}
+```
+
+If you keep credentials in the repo `.env` instead, you can omit the `env` object. `run.py` will load that file.
+
+## Tools reference
+
+### `wan_create_video`
+
+Create a Wan 3.0 video-synthesis task. Asynchronous create: sends `X-DashScope-Async: enable`. Returns `task_id` and `task_status` (typically `PENDING`). Does not invent fields (no `enable_thinking`).
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `prompt` | string | no (prompt or media) | Text prompt, Chinese or English. Max 20000 characters. In reference mode, "Image 1" / "Video 1" / "Audio 1" index media of that type in array order. |
+| `media` | array of objects | no (prompt or media) | `input.media[]` items. Each item: `type` plus `url`. |
+| `media[].type` | enum | yes (per item) | `first_frame`, `last_frame`, `reference_image`, `reference_video`, `reference_audio`, `file`, `link`. |
+| `media[].url` | string | yes (per item) | Public `http(s)` URL, or for images `data:{MIME_type};base64,...`. |
+| `resolution` | enum | no | `1080P`, `720P`, `480P`. Official default 1080P. |
+| `ratio` | enum | no | `adaptive`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16`. Official default adaptive. |
+| `duration` | integer | no | Seconds: 2 to 30, or `-1` smart duration. Official default 5. With video input, input plus output duration must be at most 30s. |
+| `audio` | boolean | no | Official default true. Enabling or disabling audio does not affect pricing. |
+| `seed` | integer | no | `[0, 2147483647]`. |
+| `watermark` | boolean | no | Official default false. |
+| `model` | enum | no | Fixed value `wan3.0-video`. |
+
+Returns a Model Studio JSON object with `request_id` and `output` (`task_id`, `task_status`). On validation or API failure, `{ "error": true, "message": "..." }` plus optional `code`, `request_id`, and `status_code`.
+
+### `wan_get_task`
+
+Query a task by id.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `task_id` | string | yes | Task id from `wan_create_video`. Valid for 24 hours. |
+
+Returns Model Studio JSON with `output.task_status`, usage when present, and `output.video_url` when `SUCCEEDED`. Same error object shape as create.
+
+### `wan_wait_for_video`
+
+Poll until the task is terminal, then download the mp4 locally.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `task_id` | string | yes | Task id from `wan_create_video`. Valid for 24 hours. |
+| `poll_interval_seconds` | number | no | Poll interval. Official recommendation is about 15 seconds. Default 15. |
+| `timeout_seconds` | number | no | Stop waiting after this many seconds. Default 900. |
+
+On `SUCCEEDED`, downloads `video_url` to `WAN_OUTPUT_DIR` and returns the official payload plus `local_path`. On `FAILED`, `{ "error": true, "message": "..." }`. Other terminal statuses return the last task payload.
+
+## Usage example
+
+After the server is connected in Cursor or Claude Desktop:
+
+1. Call `wan_create_video` with `prompt` set to a short scene, for example `A golden retriever running along a beach at sunrise, cinematic, 16:9`.
+2. Read `output.task_id` from the result.
+3. Call `wan_wait_for_video` with that `task_id`.
+4. Open `local_path` when status is `SUCCEEDED`.
+
+To inspect progress without downloading, call `wan_get_task` between create and wait.
 
 ## Endpoints (official)
 
 - Singapore create: `POST https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis`
 - Beijing create: `POST https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis`
-- Poll: `GET https://{WorkspaceId}.{region-host}.maas.aliyuncs.com/api/v1/tasks/{task_id}` every ~15s
+- Poll: `GET https://{WorkspaceId}.{region-host}.maas.aliyuncs.com/api/v1/tasks/{task_id}` about every 15s
 
 Headers:
 
 - `Authorization: Bearer $DASHSCOPE_API_KEY`
-- `X-DashScope-Async: enable` (required on **create**; missing → sync-not-supported error)
+- `X-DashScope-Async: enable` (required on create; missing yields a sync-not-supported error)
 - `Content-Type: application/json`
-
-Model is fixed: `wan3.0-video`.
-
-Poll statuses: `PENDING` `RUNNING` `SUCCEEDED` `FAILED` `CANCELED` `UNKNOWN`. On `SUCCEEDED`, `video_url` lives 24h — `wan_wait_for_video` downloads the mp4 to `WAN_OUTPUT_DIR` and returns the local path.
-
-## MCP tools
-
-1. `wan_create_video` — official create-task surface (`prompt`, `media[]` with `type`+`url`, `resolution`, `ratio`, `duration`, `audio`, `seed`, `watermark`, `model`). Schema + runtime reject illegal combos (type caps, file vs link, `reference_*`/`file`/`link` vs `first_frame`/`last_frame`, duration `-1` or 2–30, seed range, prompt ≤ 20000).
-2. `wan_get_task` — `task_id` → status + usage + `video_url`
-3. `wan_wait_for_video` — poll ~15s until terminal, download mp4, return `local_path` + official usage/output
-
-## Tests
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest
-```
-
-HTTP is mocked. There is **no** live paid generate call in CI or smoke tests.
 
 ## License
 
-Private HomeBooks use.
+MIT. Copyright (c) 2026 Matin Rahimi.
