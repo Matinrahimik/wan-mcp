@@ -4,7 +4,7 @@
 
 Wan video generation for AI assistants
 
-This lets AI assistants in chat apps and code editors make short videos from a text description, using Wan. You type something like "make a 5 second video of a lake at sunrise" and the assistant gives you back a video. It is for people who use those apps and want the assistant to create the clip for them. You need your own Wan API key from Alibaba Cloud Model Studio (DashScope). MCP is a standard plug that lets AI assistants use outside tools.
+wan-mcp connects AI assistants such as chat applications and code editors to Alibaba's Wan video model through the Model Context Protocol (MCP), an open standard that allows assistants to use external tools. Once installed, you can ask your assistant for something like "Create a 5 second video of a lake at sunrise," and it returns a finished video clip. It is designed for creators, marketers, and teams who want to produce short videos from the assistant they already use. To get started, you need your own Wan API key from Alibaba Cloud Model Studio.
 
 stdio MCP server for [Alibaba Wan 3.0 video](https://www.alibabacloud.com/help/en/model-studio/wan3-video-generation-api-reference) through the official Model Studio API only. It exposes three tools so an assistant can create a task, poll status, and download the finished mp4.
 
