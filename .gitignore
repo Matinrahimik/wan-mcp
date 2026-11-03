@@ -9,6 +9,8 @@ htmlcov/
 dist/
 build/
 .env
+.env.*
+!.env.example
 *.mp4
 wan-output/
 .DS_Store

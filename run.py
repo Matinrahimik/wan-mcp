@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Load HomeBooks connector secrets and exec the Wan MCP stdio server.
-
-Local install target after merge: /home/box/mcp-servers/wan/
-
-AddMcpServer:
-  name: wan
-  command: /home/box/mcp-servers/wan/.venv/bin/python
-  args: ["/home/box/mcp-servers/wan/run.py"]
-"""
+"""Load credentials from env or optional JSON, then exec the Wan MCP stdio server."""
 
 from __future__ import annotations
 
@@ -20,7 +12,7 @@ _SRC = _ROOT / "src"
 if _SRC.is_dir():
     sys.path.insert(0, str(_SRC))
 
-from wan_mcp.config import ConfigError, apply_secrets_to_env  # noqa: E402
+from wan_mcp.config import ConfigError, apply_secrets_to_env, load_env_file  # noqa: E402
 
 
 def _exec_server() -> None:
@@ -36,6 +28,7 @@ def _exec_server() -> None:
 
 
 def main() -> None:
+    load_env_file(_ROOT / ".env")
     try:
         apply_secrets_to_env()
     except ConfigError as exc:

@@ -87,9 +87,9 @@ async def wan_create_video(
         Field(
             default=None,
             description=(
-                "parameters.duration in seconds: integer 2–30, or -1 smart "
+                "parameters.duration in seconds: integer 2 to 30, or -1 smart "
                 "duration. Official default 5. With video input, input + output "
-                "duration must be ≤30s."
+                "duration must be at most 30s."
             ),
         ),
     ] = None,
@@ -193,8 +193,8 @@ async def wan_wait_for_video(
     """Poll a Wan 3.0 task until terminal, then download the mp4 locally.
 
     On SUCCEEDED, downloads video_url (24h) to WAN_OUTPUT_DIR
-    (default /workspace/wan-output/) and returns local_path plus official
-    output/usage fields.
+    (default ./wan-output under the current working directory) and returns
+    local_path plus official output/usage fields.
     """
     try:
         return await _client().wait_for_video(

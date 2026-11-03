@@ -1,4 +1,4 @@
-"""Resolve DashScope / Wan credentials without hardcoding an agent id."""
+"""Resolve DashScope / Wan credentials without hardcoding machine paths."""
 
 from __future__ import annotations
 
@@ -6,11 +6,10 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, MutableMapping
 
-CONNECTOR_SECRETS_ROOT = Path("/home/box/agent-data/connector-secrets")
 SECRET_FILENAME = "wan.json"
-DEFAULT_OUTPUT_DIR = Path("/workspace/wan-output")
+DEFAULT_OUTPUT_DIRNAME = "wan-output"
 DEFAULT_REGION = "singapore"
 VALID_REGIONS = frozenset({"singapore", "beijing"})
 
@@ -44,6 +43,11 @@ class WanSettings:
 
     def task_url(self, task_id: str) -> str:
         return f"{self.base_url}/api/v1/tasks/{task_id}"
+
+
+def default_output_dir() -> Path:
+    """Succeeded mp4 files go to ./wan-output under the current working directory."""
+    return Path.cwd() / DEFAULT_OUTPUT_DIRNAME
 
 
 def _nonempty(value: str | None) -> str | None:
@@ -93,36 +97,93 @@ def _normalize_region(region: str) -> str:
     return lowered
 
 
+def load_env_file(
+    path: Path,
+    environ: MutableMapping[str, str] | None = None,
+) -> None:
+    """Load KEY=VALUE lines into environ without overwriting existing keys.
+
+    Values are never logged. Missing files are ignored.
+    """
+    env: MutableMapping[str, str] = os.environ if environ is None else environ
+    if not path.is_file():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        if key and key not in env:
+            env[key] = value
+
+
 def discover_secret_files(
     secrets_root: Path | None = None,
 ) -> list[Path]:
-    root = secrets_root if secrets_root is not None else CONNECTOR_SECRETS_ROOT
-    if not root.is_dir():
+    if secrets_root is None or not secrets_root.is_dir():
         return []
-    return sorted(p for p in root.glob(f"*/{SECRET_FILENAME}") if p.is_file())
+    return sorted(p for p in secrets_root.glob(f"*/{SECRET_FILENAME}") if p.is_file())
+
+
+def _secrets_root_from(
+    env: Mapping[str, str],
+    secrets_root: Path | None,
+) -> Path | None:
+    if secrets_root is not None:
+        return secrets_root
+    raw = _nonempty(env.get("WAN_SECRETS_ROOT"))
+    return Path(raw) if raw else None
 
 
 def resolve_settings(
-    environ: dict[str, str] | None = None,
+    environ: Mapping[str, str] | None = None,
     *,
     secrets_root: Path | None = None,
 ) -> WanSettings:
-    """Resolve credentials from env, then connector-secrets JSON.
+    """Resolve credentials from env, then optional JSON secret files.
 
     Order:
     1. ``DASHSCOPE_API_KEY`` / ``WAN_WORKSPACE_ID`` / ``WAN_REGION``
-    2. ``<root>/<WAN_AGENT_ID>/wan.json`` when ``WAN_AGENT_ID`` is set
-    3. any ``<root>/*/wan.json`` (exactly one file, or error if several)
+    2. ``WAN_SECRETS_FILE`` JSON when set
+    3. ``<WAN_SECRETS_ROOT>/<WAN_AGENT_ID>/wan.json`` when ``WAN_AGENT_ID`` is set
+    4. any ``<WAN_SECRETS_ROOT>/*/wan.json`` (exactly one file, or error if several)
     """
-    env = os.environ if environ is None else environ
-    root = secrets_root if secrets_root is not None else CONNECTOR_SECRETS_ROOT
+    if environ is None:
+        load_env_file(Path.cwd() / ".env", os.environ)
+        env: Mapping[str, str] = os.environ
+    else:
+        env = environ
+
+    root = _secrets_root_from(env, secrets_root)
 
     api_key = _nonempty(env.get("DASHSCOPE_API_KEY"))
     workspace_id = _nonempty(env.get("WAN_WORKSPACE_ID"))
     region = _nonempty(env.get("WAN_REGION"))
 
+    still_missing = api_key is None or workspace_id is None or region is None
+    secrets_file = _nonempty(env.get("WAN_SECRETS_FILE"))
+    if still_missing and secrets_file:
+        path = Path(secrets_file)
+        if not path.is_file():
+            raise ConfigError(f"WAN_SECRETS_FILE not found: {path}")
+        api_key, workspace_id, region = _fill_from_file(
+            path, api_key, workspace_id, region
+        )
+
     agent_id = _nonempty(env.get("WAN_AGENT_ID"))
-    if (api_key is None or workspace_id is None or region is None) and agent_id:
+    if (
+        (api_key is None or workspace_id is None or region is None)
+        and agent_id
+        and root is not None
+    ):
         specific = root / agent_id / SECRET_FILENAME
         if specific.is_file():
             api_key, workspace_id, region = _fill_from_file(
@@ -130,7 +191,7 @@ def resolve_settings(
             )
 
     still_missing = api_key is None or workspace_id is None or region is None
-    if still_missing:
+    if still_missing and root is not None:
         matches = discover_secret_files(root)
         if agent_id:
             matches = [p for p in matches if p.parent.name != agent_id]
@@ -140,7 +201,7 @@ def resolve_settings(
             )
         elif len(matches) > 1 and (api_key is None or workspace_id is None):
             raise ConfigError(
-                "Multiple connector-secrets/*/wan.json files found. "
+                "Multiple */wan.json files found under WAN_SECRETS_ROOT. "
                 "Set WAN_AGENT_ID to select one."
             )
 
@@ -152,7 +213,7 @@ def resolve_settings(
         region = DEFAULT_REGION
 
     output_dir_raw = _nonempty(env.get("WAN_OUTPUT_DIR"))
-    output_dir = Path(output_dir_raw) if output_dir_raw else DEFAULT_OUTPUT_DIR
+    output_dir = Path(output_dir_raw) if output_dir_raw else default_output_dir()
 
     return WanSettings(
         api_key=api_key,
@@ -163,12 +224,12 @@ def resolve_settings(
 
 
 def apply_secrets_to_env(
-    environ: dict[str, str] | None = None,
+    environ: MutableMapping[str, str] | None = None,
     *,
     secrets_root: Path | None = None,
 ) -> WanSettings:
     """Load settings and copy them into the process environment (no logging)."""
-    env = os.environ if environ is None else environ
+    env: MutableMapping[str, str] = os.environ if environ is None else environ
     settings = resolve_settings(env, secrets_root=secrets_root)
     env["DASHSCOPE_API_KEY"] = settings.api_key
     env["WAN_WORKSPACE_ID"] = settings.workspace_id
